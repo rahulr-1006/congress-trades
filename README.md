@@ -66,8 +66,29 @@ congress-trades extract CHRG-119hhrg64507 \
     --tasks entities sentiment signal
 ```
 
+Real output from Llama 3.1 8B (Q4_K_M) on an M1 Pro, fully offline, on a Dec 2025 House
+Foreign Affairs subcommittee hearing:
+
+```
+[  1] Mr. Keating  entities  {'companies': ['Nvidia'], 'tickers': ['NVDA'], 'sectors': ['Semiconductors']}
+[  1] Mr. Keating  sentiment {'stance': 'hostile', 'score': -0.85, 'target': "Russia and China's hybrid warfare in Europe"}
+[  1] Mr. Keating  signal    {'policy_signal': True, 'signal_type': 'regulation', 'direction': 'negative',
+                              'affected': ['Nvidia'], 'summary': 'The White House approved the export of
+                              advanced Nvidia H200 chips to China ...'}
+[  2] Mr. Self     signal    {'policy_signal': False, 'signal_type': 'none', 'direction': 'none',
+                              'affected': [], 'summary': 'None, procedural remarks and greetings'}
+```
+
 Every output is written to the `model_outputs` table with the model name and task, so any
 future signal can be traced back to the exact statement and model that produced it.
+
+Already have the model in Ollama? Its blobs are GGUF files, so you can reuse one without
+downloading anything:
+
+```bash
+ollama show llama3.1 --modelfile | grep ^FROM      # prints the blob path
+ln -s <that path> models/llama-3.1-8b-instruct-q4_k_m.gguf
+```
 
 **Hardware:** 8B @ Q4_K_M needs ~6 GB RAM and runs well on Apple Silicon (Metal) or a
 consumer GPU. No internet needed after the model is downloaded.
