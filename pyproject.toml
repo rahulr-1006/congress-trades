@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "congress-trades"
 version = "0.1.0"
-description = "Local-LLM (llama.cpp) analysis of congressional stock trades and news to generate trading signals."
+description = "Trading signals from congressional hearings, extracted by a local llama.cpp LLM."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -20,6 +20,9 @@ congress-trades = "congress_trades.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+congress_trades = ["llm/prompts/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

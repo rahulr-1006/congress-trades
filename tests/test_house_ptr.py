@@ -1,6 +1,6 @@
 from datetime import date
 
-from congress_trades.house import parse_ptrs
+from congress_trades.ingest.house_ptr import parse_ptrs
 
 
 def test_parse_keeps_only_valid_ptrs(sample_xml):

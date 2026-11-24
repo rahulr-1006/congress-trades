@@ -7,6 +7,26 @@ PTR_PDF_URL = "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/{year}/{
 
 
 @dataclass(frozen=True)
+class Hearing:
+    package_id: str
+    title: str
+    committee: str
+    chamber: str
+    congress: int
+    held_on: date
+
+
+@dataclass(frozen=True)
+class Statement:
+    """One continuous speaker turn within a hearing."""
+
+    package_id: str
+    seq: int
+    speaker: str
+    text: str
+
+
+@dataclass(frozen=True)
 class Filing:
     """One Periodic Transaction Report (PTR) filed with the House Clerk."""
 

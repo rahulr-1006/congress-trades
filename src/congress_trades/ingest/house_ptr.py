@@ -14,7 +14,7 @@ import zipfile
 from collections.abc import Iterator
 from datetime import datetime
 
-from .models import Filing
+from ..models import Filing
 
 INDEX_URL = "https://disclosures-clerk.house.gov/public_disc/financial-pdfs/{year}FD.zip"
 PTR_FILING_TYPE = "P"

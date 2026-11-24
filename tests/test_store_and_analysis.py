@@ -1,21 +1,21 @@
 from datetime import date
 
 from congress_trades.analysis import most_active
-from congress_trades.house import parse_ptrs
+from congress_trades.ingest.house_ptr import parse_ptrs
 from congress_trades.store import Store
 
 
 def test_upsert_is_idempotent(sample_xml):
     store = Store()
     filings = list(parse_ptrs(sample_xml))
-    assert store.upsert(filings) == 3
-    assert store.upsert(filings) == 0
-    assert store.count() == 3
+    assert store.upsert_filings(filings) == 3
+    assert store.upsert_filings(filings) == 0
+    assert store.filing_count() == 3
 
 
 def test_since_filter(sample_xml):
     store = Store()
-    store.upsert(parse_ptrs(sample_xml))
+    store.upsert_filings(parse_ptrs(sample_xml))
     assert [f.doc_id for f in store.filings(since=date(2025, 6, 1))] == ["20026002"]
 
 
