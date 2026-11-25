@@ -199,6 +199,103 @@ def _validate(args, store: Store) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- distillation
+def _distill_label(args, store: Store) -> int:
+    """Teacher pass: label every dev candidate statement with the combined task (resumable)."""
+    from .llm import LlamaCppEngine, run_task
+    from .training import dataset
+
+    items = dataset.candidates(store, _mention_index(store))
+    model_id = args.model.name
+    todo = [(h, st) for h, st in items if not store.has_output(st, dataset.TASK, model_id)]
+    print(f"{len(items)} candidate statements, {len(todo)} still to label with {model_id}")
+    engine = LlamaCppEngine(str(args.model), n_ctx=args.n_ctx)
+    t_start = time.perf_counter()
+    for i, (h, st) in enumerate(todo[: args.limit], 1):
+        t0 = time.perf_counter()
+        try:
+            out = run_task(engine, dataset.TASK, h, st)
+        except ValueError as e:
+            print(f"[{i}] {st.package_id}#{st.seq}: invalid output ({str(e)[:80]})")
+            continue
+        ms = (time.perf_counter() - t0) * 1000
+        store.log_output(st, dataset.TASK, model_id, out, ms, engine.last_usage)
+        rate = i / (time.perf_counter() - t_start) * 3600
+        print(f"[{i}/{min(len(todo), args.limit)}] {st.package_id}#{st.seq} {ms:>6.0f}ms "
+              f"({rate:.0f}/h) tickers={out.get('tickers')} dir={out.get('direction')}",
+              flush=True)
+    return 0
+
+
+def _distill_build(args, store: Store) -> int:
+    from .training import dataset
+
+    stats = dataset.build(store, _mention_index(store), args.teacher, args.out, args.valid_frac)
+    print(f"train={stats.train} valid={stats.valid} unlabeled={stats.unlabeled} "
+          f"teacher tickers dropped as ungrounded={stats.tickers_dropped} -> {args.out}")
+    return 0
+
+
+def _distill_train(args, store: Store) -> int:
+    from .training import pipeline
+
+    pipeline.train(args.base, args.data, args.run / "adapters", iters=args.iters,
+                   batch_size=args.batch_size, num_layers=args.num_layers,
+                   learning_rate=args.lr)
+    return 0
+
+
+def _distill_export(args, store: Store) -> int:
+    from .training import pipeline
+
+    f16 = pipeline.fuse_to_gguf(args.base, args.run / "adapters", args.run)
+    print(f"f16: {f16} ({f16.stat().st_size / 1e9:.2f} GB)")
+    for q in args.quants:
+        out = pipeline.quantize(f16, args.run / f"{args.run.name}-{q}.gguf", q)
+        print(f"{q}: {out} ({out.stat().st_size / 1e9:.2f} GB)")
+    return 0
+
+
+def _distill_eval(args, store: Store) -> int:
+    """Run a model on the held-out (valid) hearings and score agreement with the teacher."""
+    from .llm import LlamaCppEngine, run_task
+    from .training import dataset
+    from .training.evaluate import Agreement
+
+    index = _mention_index(store)
+    labels = store.outputs(args.teacher)
+    items = [(h, st) for h, st in dataset.candidates(store, index)
+             if dataset.is_valid_hearing(h.package_id, args.valid_frac)
+             and dataset.TASK in labels.get((st.package_id, st.seq), {})][: args.limit]
+    if not items:
+        print("No labeled validation statements. Run `distill label` first.")
+        return 1
+    engine = LlamaCppEngine(str(args.model), n_ctx=args.n_ctx)
+    model_id = args.model.name
+    agg = Agreement()
+    names: dict[str, set[str]] = {}
+    for h, st in items:
+        if h.package_id not in names:
+            names[h.package_id] = tk.speaker_surnames(
+                s.speaker for s in store.statements(h.package_id))
+        ref = dataset.clean_label(labels[(st.package_id, st.seq)][dataset.TASK],
+                                  index.find(st.text, names[h.package_id]))
+        t0 = time.perf_counter()
+        try:
+            pred = run_task(engine, dataset.TASK, h, st, constrained=args.schema)
+        except ValueError:
+            pred = None
+        ms = (time.perf_counter() - t0) * 1000
+        agg.latencies_ms.append(ms)
+        if pred is not None:
+            store.log_output(st, dataset.TASK, model_id, pred, ms, engine.last_usage)
+        agg.add(ref, pred)
+    print(f"model={model_id} teacher={args.teacher} schema_constrained={args.schema}")
+    for k, v in agg.summary().items():
+        print(f"  {k:<17} {v:.3f}" if isinstance(v, float) else f"  {k:<17} {v}")
+    return 0
+
+
 # ---------------------------------------------------------------- PTRs
 def _ptr_ingest(args, store: Store) -> int:
     for year in args.year:
@@ -276,6 +373,43 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--benchmark", default="SPY")
     v.add_argument("--sentiment-threshold", type=float, default=0.5)
     v.set_defaults(func=_validate)
+
+    dp = sub.add_parser("distill", help="Teacher labeling + student fine-tuning").add_subparsers(
+        dest="action", required=True)
+    dl = dp.add_parser("label", help="Label dev-set statements with a local teacher model")
+    dl.add_argument("--model", type=Path, required=True, help="Teacher GGUF")
+    dl.add_argument("--limit", type=int, default=10_000)
+    dl.add_argument("--n-ctx", type=int, default=4096)
+    dl.set_defaults(func=_distill_label)
+    db = dp.add_parser("build", help="Export teacher labels as train/valid JSONL")
+    db.add_argument("--teacher", required=True, help="Teacher model file name")
+    db.add_argument("--out", type=Path, default=Path("data/distill"))
+    db.add_argument("--valid-frac", type=float, default=0.15)
+    db.set_defaults(func=_distill_build)
+    dt = dp.add_parser("train", help="LoRA fine-tune a student with MLX")
+    dt.add_argument("--base", required=True, help="HF repo or path, e.g. "
+                    "mlx-community/Llama-3.2-1B-Instruct-bf16")
+    dt.add_argument("--data", type=Path, default=Path("data/distill"))
+    dt.add_argument("--run", type=Path, required=True, help="Output dir, e.g. runs/llama-1b")
+    dt.add_argument("--iters", type=int, default=600)
+    dt.add_argument("--batch-size", type=int, default=2)
+    dt.add_argument("--num-layers", type=int, default=16)
+    dt.add_argument("--lr", type=float, default=1e-4)
+    dt.set_defaults(func=_distill_train)
+    de = dp.add_parser("export", help="Fuse adapter, export GGUF, quantize")
+    de.add_argument("--base", required=True)
+    de.add_argument("--run", type=Path, required=True)
+    de.add_argument("--quants", nargs="+", default=["Q8_0", "Q4_K_M"])
+    de.set_defaults(func=_distill_export)
+    dv = dp.add_parser("eval", help="Agreement with the teacher on held-out hearings")
+    dv.add_argument("--model", type=Path, required=True)
+    dv.add_argument("--teacher", required=True)
+    dv.add_argument("--limit", type=int, default=200)
+    dv.add_argument("--valid-frac", type=float, default=0.15)
+    dv.add_argument("--n-ctx", type=int, default=4096)
+    dv.add_argument("--no-schema", dest="schema", action="store_false",
+                    help="Disable grammar-constrained decoding (to measure its effect)")
+    dv.set_defaults(func=_distill_eval)
 
     pp = sub.add_parser("ptr", help="House trade disclosures (PTRs)").add_subparsers(
         dest="action", required=True)

@@ -15,6 +15,7 @@ from collections.abc import Iterable
 from datetime import date
 
 from ..backtest.event_study import Event
+from ..llm.tasks import split_combined
 from ..market.tickers import MentionIndex, speaker_surnames
 from ..models import Hearing, Statement
 
@@ -72,6 +73,8 @@ def llm_v0(
         d = decision_date(h, timing)
         if not out or not d:
             continue
+        if "combined" in out:
+            out = {**split_combined(out["combined"]), **out}
         direction = llm_direction(out, sentiment_threshold)
         if direction == 0:
             continue

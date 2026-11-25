@@ -37,7 +37,7 @@ BUY/SELL/HOLD signals that can be backtested against price data.
 | `backtest/event_study.py` | ✅ | Market-adjusted returns at 1/5/20 days, t-stats, hit rate; no lookahead |
 | `backtest/splits.py` | ✅ | Dev/holdout split at the model's knowledge cutoff |
 | `store.py` | ✅ | SQLite: transcripts, statements, model outputs + latency (audit trail), prices |
-| Fine-tuning | 🚧 | LoRA fine-tune → merge → GGUF → quantization sweep ([plan](docs/FINETUNING.md)) |
+| `training/` | ✅ | Local teacher labeling → MLX LoRA → llama.cpp GGUF → quantization → eval ([docs](docs/FINETUNING.md)) |
 
 Full scope: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) · Compliance: [docs/COMPLIANCE.md](docs/COMPLIANCE.md)
 
@@ -156,8 +156,11 @@ No edge from mentions alone, which is the expected null result and the bar to be
 - [x] llama.cpp inference layer with separate, swappable task prompts
 - [x] Audit log of every model output with latency and token usage
 - [x] Event-study validation with baseline, timing modes, and cutoff-aware split
-- [ ] Hand-labeled gold set for extraction accuracy (precision/recall per task)
-- [ ] LoRA fine-tune of Llama 3 → GGUF → quantization sweep (accuracy vs. latency vs. memory), see [docs/FINETUNING.md](docs/FINETUNING.md)
+- [x] Distillation pipeline: local 14B teacher → LoRA students → GGUF → quantization ([docs](docs/FINETUNING.md))
+- [x] Grammar-constrained decoding from JSON schemas
+- [ ] Full teacher run + student/quantization matrix (accuracy vs. latency vs. memory)
+- [ ] Profile student decode speed (grammar vs. prefill vs. decode)
+- [ ] Hand-labeled gold set for extraction accuracy (backlog)
 - [ ] Live hearing audio → text with whisper.cpp
 - [ ] C++ event-driven backtest core (pybind11)
 - [ ] Cross-reference signals with members' own PTR trades

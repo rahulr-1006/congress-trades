@@ -8,14 +8,16 @@ from typing import Protocol
 class ChatModel(Protocol):
     """Anything that turns (system, user) prompts into a completion string."""
 
-    def chat(self, system: str, user: str, *, max_tokens: int = 1024) -> str: ...
+    def chat(
+        self, system: str, user: str, *, max_tokens: int = 1024, schema: dict | None = None
+    ) -> str: ...
 
 
 class LlamaCppEngine:
     def __init__(
         self,
         model_path: str,
-        n_ctx: int = 8192,
+        n_ctx: int = 4096,
         n_gpu_layers: int = -1,
         temperature: float = 0.1,
         seed: int = 42,
@@ -36,12 +38,19 @@ class LlamaCppEngine:
         self.model_path = model_path
         self.last_usage: dict[str, int] = {}
 
-    def chat(self, system: str, user: str, *, max_tokens: int = 1024) -> str:
+    def chat(
+        self, system: str, user: str, *, max_tokens: int = 1024, schema: dict | None = None
+    ) -> str:
+        # json_object alone guarantees syntactically valid JSON; adding a schema also
+        # guarantees the keys and types (llama.cpp converts it to a GBNF grammar).
+        fmt: dict = {"type": "json_object"}
+        if schema:
+            fmt["schema"] = schema
         resp = self._llm.create_chat_completion(
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
             temperature=self.temperature,
             max_tokens=max_tokens,
-            response_format={"type": "json_object"},
+            response_format=fmt,
         )
         self.last_usage = resp.get("usage", {})
         return resp["choices"][0]["message"]["content"]

@@ -15,8 +15,9 @@ class FakeModel:
     def __init__(self, reply: dict):
         self.reply, self.calls = reply, []
 
-    def chat(self, system, user, *, max_tokens=1024):
+    def chat(self, system, user, *, max_tokens=1024, schema=None):
         self.calls.append((system, user))
+        self.schema = schema
         return "Here you go: " + json.dumps(self.reply)
 
 
@@ -37,3 +38,18 @@ def test_run_task_passes_context_and_parses_output():
 def test_missing_keys_rejected():
     with pytest.raises(ValueError, match="missing keys"):
         parse_json('{"stance": "hostile"}', ("stance", "score"))
+
+
+def test_schema_lists_every_required_key():
+    for spec in TASKS.values():
+        schema = spec.json_schema
+        assert set(spec.required_keys) <= set(schema["required"])
+        assert set(schema["required"]) == set(schema["properties"])
+
+
+def test_run_task_sends_schema_unless_disabled():
+    model = FakeModel({"stance": "neutral", "score": 0, "target": ""})
+    run_task(model, "sentiment", HEARING, STMT)
+    assert model.schema["required"] == ["stance", "score", "target"]
+    run_task(model, "sentiment", HEARING, STMT, constrained=False)
+    assert model.schema is None
