@@ -22,7 +22,7 @@ congress-trades = "congress_trades.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-congress_trades = ["llm/prompts/*.md"]
+congress_trades = ["llm/prompts/*.md", "market/common_words.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

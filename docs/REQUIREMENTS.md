@@ -9,7 +9,7 @@ companies/sectors) before or as the market reacts.
 ## 2. Data ingestion
 | Requirement | Status |
 | --- | --- |
-| Hearing transcripts from GovInfo (`CHRG` collection) | ✅ `ingest/hearings.py` |
+| Hearing transcripts from GovInfo (`CHRG` collection), keyless, with held + publish dates | ✅ `ingest/hearings.py` |
 | Speaker identity per statement | ✅ |
 | Committee, date, chamber | ✅ |
 | Topic tags | ⬜ (planned: LLM task) |
@@ -29,15 +29,15 @@ companies/sectors) before or as the market reacts.
 ## 4. Signal generation
 | Requirement | Status |
 | --- | --- |
-| Map entities → tickers / sector ETFs | 🚧 `signals/mapping.py` |
-| Scoring rule → BUY/SELL/HOLD + confidence | 🚧 `signals/scoring.py` |
+| Map entities → tickers (grounded against listed universe) | ✅ `market/tickers.py` |
+| Scoring rule → direction (baseline + LLM v0) | ✅ `signals/scoring.py` |
 | Audit log: source hearing, text span, raw model output | ✅ `model_outputs` table; 🚧 signals table |
 
 ## 5. Backtesting
 | Requirement | Status |
 | --- | --- |
-| Historical hearings paired with historical prices | ⬜ |
-| Same pipeline live and in backtest; no lookahead | 🚧 `backtest/engine.py` |
+| Historical hearings paired with historical prices | ✅ `hearings backfill`, `market/prices.py` |
+| Same pipeline live and in backtest; no lookahead | ✅ `backtest/event_study.py` |
 | Returns, Sharpe, max drawdown, hit rate | ✅ `backtest/metrics.py` |
 
 ## 6. Infra / systems

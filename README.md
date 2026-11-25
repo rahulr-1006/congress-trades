@@ -27,14 +27,17 @@ BUY/SELL/HOLD signals that can be backtested against price data.
 
 | Module | Status | Responsibility |
 | --- | --- | --- |
-| `ingest/hearings.py` | ✅ | GovInfo client; splits transcripts into speaker-attributed statements |
+| `ingest/hearings.py` | ✅ | GovInfo transcripts + MODS metadata (held date, publish date, committee); no API key |
 | `ingest/house_ptr.py` | ✅ | House Clerk STOCK Act trade disclosures |
-| `llm/engine.py` | ✅ | llama.cpp inference (Metal/CUDA offload, JSON-constrained output) |
+| `market/tickers.py` | ✅ | 5.5k US-listed stocks; O(n) n-gram company-mention pre-filter |
+| `market/prices.py` | ✅ | Daily adjusted closes, cached in SQLite |
+| `llm/engine.py` | ✅ | llama.cpp inference (Metal/CUDA offload, JSON-constrained output, token usage) |
 | `llm/tasks.py` + `llm/prompts/` | ✅ | Extraction task specs, kept separate from the engine |
-| `store.py` | ✅ | SQLite: raw text, statements, every model output (audit trail) |
-| `backtest/metrics.py` | ✅ | Total return, Sharpe, max drawdown, hit rate |
-| `signals/` | 🚧 | Entity → ticker mapping, scoring rule |
-| `backtest/engine.py` | 🚧 | Point-in-time, lookahead-free replay of the live pipeline |
+| `signals/scoring.py` | ✅ | Mention baseline + LLM scorer (LLM tickers must be grounded in the text) |
+| `backtest/event_study.py` | ✅ | Market-adjusted returns at 1/5/20 days, t-stats, hit rate; no lookahead |
+| `backtest/splits.py` | ✅ | Dev/holdout split at the model's knowledge cutoff |
+| `store.py` | ✅ | SQLite: transcripts, statements, model outputs + latency (audit trail), prices |
+| Fine-tuning | 🚧 | LoRA fine-tune → merge → GGUF → quantization sweep ([plan](docs/FINETUNING.md)) |
 
 Full scope: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) · Compliance: [docs/COMPLIANCE.md](docs/COMPLIANCE.md)
 
@@ -46,15 +49,22 @@ cd congress-trades
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,llm]"
 
-export GOVINFO_API_KEY=...            # free: https://api.data.gov/signup
-
-congress-trades hearings fetch --since 2026-01-01 --limit 10
+congress-trades tickers sync                         # US-listed stock universe
+congress-trades hearings backfill --year 2023 --limit 25   # market-relevant committees
 congress-trades hearings list
+congress-trades mentions CHRG-118hhrg52357           # which companies came up?
 ```
 
 ```
-saved CHRG-119hhrg64507  2025-12-16   110 statements  Subcommittee On Europe: HYBRID WARFARE IN EUROPE...
+saved CHRG-118hhrg52357  held 2023-02-07  published 2023-09-06   454 stmts  Financial Services: COMBATTING THE ECONOMIC THREAT FROM CHINA
+[  8] Chairman McHenry   {'LRCX': 'LAM RESEARCH'}
+[124] Mr. Hill           {'INTC': 'Intel'}
+[168] Mr. Foster         {'TSM': 'TSMC'}
+[320] Mr. Torres         {'META': 'Facebook'}
 ```
+
+No API keys anywhere: transcripts come from GovInfo's public content/sitemap endpoints, ticker
+lists from Nasdaq Trader, prices from Yahoo's public chart endpoint.
 
 ### Run the local model
 
@@ -64,6 +74,7 @@ Download any instruct-tuned GGUF (e.g. Llama 3.1 8B Instruct Q4_K_M, ~5 GB) into
 congress-trades extract CHRG-119hhrg64507 \
     --model models/llama-3.1-8b-instruct-q4_k_m.gguf \
     --tasks entities sentiment signal
+congress-trades latency     # p50/p95 latency and tokens/sec per model and task
 ```
 
 Real output from Llama 3.1 8B (Q4_K_M) on an M1 Pro, fully offline, on a Dec 2025 House
@@ -79,8 +90,10 @@ Foreign Affairs subcommittee hearing:
                               'affected': [], 'summary': 'None, procedural remarks and greetings'}
 ```
 
-Every output is written to the `model_outputs` table with the model name and task, so any
-future signal can be traced back to the exact statement and model that produced it.
+Only statements that mention a listed company are sent to the model (`--no-prefilter` to
+disable). On a typical hearing that's ~2% of statements, which turns a ~30 min hearing into
+under a minute. Every output is written to `model_outputs` with the model, task, latency, and
+token counts, so any signal can be traced to the exact statement and model that produced it.
 
 Already have the model in Ollama? Its blobs are GGUF files, so you can reuse one without
 downloading anything:
@@ -100,15 +113,51 @@ consumer GPU. No internet needed after the model is downloaded.
 - Engine: anything with a `chat(system, user) -> str` method works (that's how the tests run
   without weights).
 
+## Validation
+
+```bash
+congress-trades validate --scorer baseline --timing published --split dev
+congress-trades validate --scorer llm      --timing published --split dev --model <file>.gguf
+```
+
+Each signal becomes an event; the event study measures the stock's return minus SPY's, signed
+by the signal's direction, from the first close *after* the decision date.
+
+Design choices that keep the numbers honest:
+
+- **Two timing modes.** `held` trades on the hearing date (upper bound: assumes live
+  processing). `published` trades when the transcript hit GovInfo, which is what a
+  transcript-only system can actually do. The gap is large: 2023 transcripts appeared
+  1.5 to 18 months after the hearing.
+- **Knowledge-cutoff split.** Llama 3.1's training data runs through ~Dec 2023, so it may
+  "remember" how older stories played out. Hearings up to the cutoff are dev; later ones are
+  the holdout.
+- **Baselines first.** `baseline` goes long every mentioned company. The LLM has to beat it.
+- **Grounding.** LLM tickers only count if the deterministic pre-filter also found that
+  company in the statement, which drops hallucinated tickers.
+- **Survivorship is reported.** Delisted companies have no prices; the report says how many
+  events were skipped.
+
+First baseline run (23 hearings from 2023, 96 events, `published` timing):
+
+```
+ horizon     n   mean CAR   t-stat  hit rate
+     1d     96     -0.14%    -0.82    41.7%
+     5d     96     -0.07%    -0.16    58.3%
+    20d     96      0.02%     0.03    49.0%
+```
+
+No edge from mentions alone, which is the expected null result and the bar to beat.
+
 ## Roadmap
 
-- [x] Hearing transcript ingestion with speaker + committee attribution
+- [x] Hearing transcript ingestion with speaker, committee, held + publish dates
+- [x] Ticker universe, mention pre-filter, price cache
 - [x] llama.cpp inference layer with separate, swappable task prompts
-- [x] Audit log of every model output
-- [x] Performance metrics
-- [ ] Entity → ticker resolution (SEC ticker list, sector ETFs)
-- [ ] Scoring rule and signal table
-- [ ] Historical price ingestion + point-in-time backtester
+- [x] Audit log of every model output with latency and token usage
+- [x] Event-study validation with baseline, timing modes, and cutoff-aware split
+- [ ] Hand-labeled gold set for extraction accuracy (precision/recall per task)
+- [ ] LoRA fine-tune of Llama 3 → GGUF → quantization sweep (accuracy vs. latency vs. memory), see [docs/FINETUNING.md](docs/FINETUNING.md)
 - [ ] Live hearing audio → text with whisper.cpp
 - [ ] C++ event-driven backtest core (pybind11)
 - [ ] Cross-reference signals with members' own PTR trades

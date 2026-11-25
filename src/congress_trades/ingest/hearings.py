@@ -1,29 +1,27 @@
-"""Congressional hearing transcripts from the GPO's GovInfo API (``CHRG`` collection).
+"""Congressional hearing transcripts from GovInfo (GPO), no API key required.
 
-GovInfo publishes official hearing transcripts as preformatted text, with every speaker turn
-starting on an indented line such as ``    Mr. Keating. Thank you, Mr. Chair.``. This module
-lists hearings, downloads transcripts, and splits them into attributed statements.
-
-Set ``GOVINFO_API_KEY`` (free at https://api.data.gov/signup); falls back to ``DEMO_KEY``,
-which is heavily rate-limited.
+- Package lists come from the public sitemaps (``CHRG_{year}_sitemap.xml``).
+- Transcripts come from ``/content/pkg/{id}/html/{id}.htm`` (preformatted text where every
+  speaker turn starts on an indented line like ``    Mr. Keating. Thank you, Mr. Chair.``).
+- Metadata comes from MODS XML: held date, committee, and ``dateIngested``, the date the
+  transcript was published on GovInfo. That date matters for backtests, because transcripts
+  usually appear months after the hearing.
 """
 
 from __future__ import annotations
 
 import html
-import json
-import os
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
-from dataclasses import dataclass
+import xml.etree.ElementTree as ET
 from datetime import date
 
+from .. import http
 from ..models import Hearing, Statement
 
-API = "https://api.govinfo.gov"
-USER_AGENT = "congress-trades/0.1 (+https://github.com/rahulr-1006/congress-trades)"
+SITEMAP_URL = "https://www.govinfo.gov/sitemap/CHRG_{year}_sitemap.xml"
+CONTENT_URL = "https://www.govinfo.gov/content/pkg/{pid}/html/{pid}.htm"
+MODS_URL = "https://www.govinfo.gov/metadata/pkg/{pid}/mods.xml"
+MODS_NS = {"m": "http://www.loc.gov/mods/v3"}
 
 SPEAKER_RE = re.compile(
     r"^ {4}("
@@ -33,59 +31,44 @@ SPEAKER_RE = re.compile(
     r")\. (.*)$"
 )
 COMMITTEE_RE = re.compile(r"^((?:SUB)?COMMITTEE ON [A-Z ,&'\-]+?)\s*$")
+PACKAGE_RE = re.compile(r"CHRG-\d+[a-z]+\d+")
 
 
-class RateLimited(RuntimeError):
-    pass
+def list_packages(year: int) -> list[str]:
+    """All hearing package IDs GovInfo files under ``year``."""
+    xml = http.get(SITEMAP_URL.format(year=year)).decode()
+    return sorted(set(PACKAGE_RE.findall(xml)))
 
 
-@dataclass(frozen=True)
-class HearingRef:
-    package_id: str
-    title: str
-    date_issued: str
+def parse_mods(xml_bytes: bytes) -> dict:
+    root = ET.fromstring(xml_bytes)
 
+    def first(path: str) -> str:
+        el = root.find(path, MODS_NS)
+        return (el.text or "").strip() if el is not None else ""
 
-def _api_key() -> str:
-    return os.environ.get("GOVINFO_API_KEY", "DEMO_KEY")
-
-
-def _get(path: str, **params: str) -> bytes:
-    params["api_key"] = _api_key()
-    url = f"{API}{path}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            return resp.read()
-    except urllib.error.HTTPError as e:
-        if e.code == 429:
-            raise RateLimited(
-                "GovInfo rate limit hit. Get a free key at https://api.data.gov/signup "
-                "and export GOVINFO_API_KEY=..."
-            ) from e
-        raise
-
-
-def list_hearings(since: date, limit: int = 20) -> list[HearingRef]:
-    """Hearings published or modified on GovInfo since ``since`` (newest first)."""
-    path = f"/collections/CHRG/{since.isoformat()}T00:00:00Z"
-    data = json.loads(_get(path, pageSize=str(limit), offsetMark="*"))
-    return [
-        HearingRef(p["packageId"], p["title"], p.get("dateIssued", ""))
-        for p in data.get("packages", [])
+    committees = [
+        (c.get("authorityId", ""), (c.findtext("m:name[@type='authority-short']", "", MODS_NS)))
+        for c in root.iterfind(".//m:extension/m:congCommittee", MODS_NS)
     ]
+    return {
+        "title": first(".//m:titleInfo/m:title"),
+        "held_dates": [e.text.strip() for e in root.iterfind(".//m:extension/m:heldDate", MODS_NS)
+                       if e.text],
+        "date_issued": first(".//m:originInfo/m:dateIssued"),
+        "date_ingested": first(".//m:extension/m:dateIngested"),
+        "chamber": first(".//m:extension/m:chamber"),
+        "congress": first(".//m:extension/m:congress"),
+        "committees": committees,
+    }
 
 
-def fetch_transcript(package_id: str) -> tuple[dict, str]:
-    """Return (package summary metadata, plain-text transcript)."""
-    summary = json.loads(_get(f"/packages/{package_id}/summary"))
-    raw = _get(f"/packages/{package_id}/htm").decode("utf-8", errors="replace")
-    text = html.unescape(re.sub(r"<[^>]+>", "", raw))
-    return summary, text
+def html_to_text(raw: bytes) -> str:
+    return html.unescape(re.sub(r"<[^>]+>", "", raw.decode("utf-8", errors="replace")))
 
 
 def parse_committee(text: str) -> str:
-    """The most specific committee named in the transcript header (subcommittee wins)."""
+    """Fallback: most specific committee named in the transcript header (subcommittee wins)."""
     header = [ln.strip() for ln in text.splitlines()[:120]]
     found = []
     for i, line in enumerate(header):
@@ -127,18 +110,29 @@ def parse_statements(package_id: str, text: str) -> list[Statement]:
     return statements
 
 
-def build_hearing(summary: dict, text: str) -> Hearing:
-    held = (summary.get("heldDates") or [summary.get("dateIssued")])[0]
+def build_hearing(package_id: str, meta: dict, text: str) -> Hearing:
+    held = (meta["held_dates"] or [meta["date_issued"]])[0]
+    ingested = meta.get("date_ingested")
+    committee_id, committee = (meta["committees"] or [("", "")])[0]
     return Hearing(
-        package_id=summary["packageId"],
-        title=summary.get("title", ""),
-        committee=parse_committee(text),
-        chamber=summary.get("chamber", ""),
-        congress=int(summary.get("congress", 0) or 0),
-        held_on=date.fromisoformat(held),
+        package_id=package_id,
+        title=meta["title"],
+        committee=committee or parse_committee(text),
+        committee_id=committee_id,
+        chamber=meta["chamber"],
+        congress=int(meta["congress"] or 0),
+        held_on=date.fromisoformat(held[:10]),
+        published_on=date.fromisoformat(ingested[:10]) if ingested else None,
     )
 
 
-def fetch_hearing(package_id: str) -> tuple[Hearing, list[Statement], str]:
-    summary, text = fetch_transcript(package_id)
-    return build_hearing(summary, text), parse_statements(package_id, text), text
+def fetch_meta(package_id: str) -> dict:
+    return parse_mods(http.get(MODS_URL.format(pid=package_id)))
+
+
+def fetch_hearing(
+    package_id: str, meta: dict | None = None
+) -> tuple[Hearing, list[Statement], str]:
+    meta = meta or fetch_meta(package_id)
+    text = html_to_text(http.get(CONTENT_URL.format(pid=package_id)))
+    return build_hearing(package_id, meta, text), parse_statements(package_id, text), text

@@ -14,6 +14,8 @@ class Hearing:
     chamber: str
     congress: int
     held_on: date
+    published_on: date | None = None  # when the transcript appeared on GovInfo
+    committee_id: str = ""
 
 
 @dataclass(frozen=True)

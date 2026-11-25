@@ -34,6 +34,7 @@ class LlamaCppEngine:
         )
         self.temperature = temperature
         self.model_path = model_path
+        self.last_usage: dict[str, int] = {}
 
     def chat(self, system: str, user: str, *, max_tokens: int = 1024) -> str:
         resp = self._llm.create_chat_completion(
@@ -42,4 +43,5 @@ class LlamaCppEngine:
             max_tokens=max_tokens,
             response_format={"type": "json_object"},
         )
+        self.last_usage = resp.get("usage", {})
         return resp["choices"][0]["message"]["content"]

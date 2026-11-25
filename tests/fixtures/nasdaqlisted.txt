@@ -1,0 +1,11 @@
+Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares
+NVDA|NVIDIA Corporation - Common Stock|Q|N|N|100|N|N
+INTC|Intel Corporation - Common Stock|Q|N|N|100|N|N
+MU|Micron Technology, Inc. - Common Stock|Q|N|N|100|N|N
+GOOGL|Alphabet Inc. - Class A Common Stock|Q|N|N|100|N|N
+GOOG|Alphabet Inc. - Class C Capital Stock|Q|N|N|100|N|N
+TGT|Target Corporation Common Stock|Q|N|N|100|N|N
+QQQ|Invesco QQQ Trust, Series 1|G|N|N|100|Y|N
+ZZZW|Some Corp - Warrants|Q|N|N|100|N|N
+TEST|Test Co - Common Stock|Q|Y|N|100|N|N
+File Creation Time: 1124202612:00|||||||

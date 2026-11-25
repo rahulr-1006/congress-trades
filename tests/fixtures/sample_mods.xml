@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mods xmlns="http://www.loc.gov/mods/v3" version="3.3">
+    <originInfo><dateIssued encoding="w3cdtf">2023-06-20</dateIssued></originInfo>
+    <extension>
+        <dateIngested>2024-02-01</dateIngested>
+    </extension>
+    <titleInfo><title>SEMICONDUCTOR SUPPLY CHAINS AND NATIONAL SECURITY</title></titleInfo>
+    <extension>
+        <chamber>HOUSE</chamber>
+        <congress>118</congress>
+        <heldDate>2023-06-14</heldDate>
+        <congCommittee authorityId="hsif00" chamber="H" congress="118" type="S">
+            <name type="authority-standard">Committee on Energy and Commerce</name>
+            <name type="authority-short">Energy and Commerce</name>
+        </congCommittee>
+    </extension>
+</mods>
